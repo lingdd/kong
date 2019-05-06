@@ -592,9 +592,10 @@ end
 
 function _mt:remove_lock(key, owner)
   local sql = concat {
-    "DELETE FROM locks\n",
-    "      WHERE key   = ", self:escape_literal(key), "\n",
-         "   AND owner = ", self:escape_literal(owner), ";"
+    "DELETE\n",
+    "  FROM ", self:escape_identifier("locks"), "\n",
+    " WHERE ", self:escape_identifier("key"), "   = ", self:escape_literal(key), "\n",
+    "   AND ", self:escape_identifier("owner"), " = ", self:escape_literal(owner), ";"
   }
 
   local res, err = self:query(sql)
@@ -722,6 +723,340 @@ function _mt:schema_reset()
   end
 
   return reset_schema(self)
+end
+
+
+function _mt:run_api_migrations(opts)
+  local conn = self:get_stored_connection()
+  if not conn then
+    error("no connection")
+  end
+
+  local constants = require "kong.constants"
+
+  local apis = { n = 0 }
+  for api, err in self:iterate([[
+    SELECT id,
+           EXTRACT(EPOCH FROM created_at AT TIME ZONE 'UTC') AS created_at,
+           name,
+           upstream_url,
+           preserve_host,
+           retries,
+           https_only,
+           http_if_terminated,
+           hosts,
+           uris,
+           methods,
+           strip_uri,
+           upstream_connect_timeout,
+           upstream_send_timeout,
+           upstream_read_timeout
+      FROM apis;]]) do
+    if not api then
+      return nil, err
+    end
+
+    apis.n = apis.n + 1
+    apis[apis.n] = api
+  end
+
+  if apis.n == 0 then
+    return true
+  end
+
+  local plugins = {}
+  for plugin, err in self:iterate([[
+    SELECT id,
+           name,
+           api_id
+      FROM plugins;]]) do
+    if not plugin then
+      return nil, err
+    end
+
+    local api_id = plugin.api_id
+    if api_id and api_id ~= null then
+      if not plugins[api_id] then
+        plugins[api_id] = { n = 0 }
+      end
+
+      plugins[api_id].n = plugins[api_id].n + 1
+      plugins[api_id][plugins[api_id].n] = {
+        id         = plugin.id,
+        is_bundled = constants.BUNDLED_PLUGINS[plugin.name]
+      }
+    end
+  end
+
+  local cjson = require "cjson.safe"
+  local utils = require "kong.tools.utils"
+  local url   = require "socket.url"
+
+  local migrations = { n = apis.n }
+  for i = 1, apis.n do
+    local api = apis[i]
+
+    local created_at = floor(api.created_at)
+    local updated_at = created_at
+    if api.created_at and api.created_at ~= null then
+      created_at = floor(api.created_at)
+      updated_at = created_at
+    else
+      created_at = ngx.time()
+      updated_at = created_at
+    end
+
+    local protocol
+    local host
+    local port
+    local path
+    if api.upstream_url and api.upstream_url ~= null then
+      local parsed_url = url.parse(api.upstream_url)
+
+      if parsed_url.scheme then
+        protocol = parsed_url.scheme
+      end
+
+      if parsed_url.host then
+        host = parsed_url.host
+      end
+
+      if parsed_url.port then
+        port = tonumber(parsed_url.port, 10)
+      end
+
+      if not port and protocol then
+        if protocol == "http" then
+          port = 80
+        elseif protocol == "https" then
+          port = 443
+        end
+      end
+
+      if parsed_url.path then
+        path = parsed_url.path
+      end
+    end
+
+    local name
+    if api.name and api.name ~= null then
+      name = api.name
+    end
+
+    local retries
+    local connect_timeout
+    local write_timeout
+    local read_timeout
+
+    if api.retries and api.retries ~= null then
+      retries = tonumber(api.retries, 10)
+    end
+
+    if api.upstream_connect_timeout and api.upstream_connect_timeout ~= null then
+      connect_timeout = tonumber(api.upstream_connect_timeout, 10)
+    end
+
+    if api.upstream_send_timeout and api.upstream_send_timeout ~= null then
+      write_timeout = tonumber(api.upstream_send_timeout, 10)
+    end
+
+    if api.upstream_read_timeout and api.upstream_read_timeout ~= null then
+      read_timeout = tonumber(api.upstream_read_timeout, 10)
+    end
+
+    local service_id = utils.uuid()
+    local service = {
+      id              = service_id,
+      name            = name,
+      created_at      = created_at,
+      updated_at      = updated_at,
+      retries         = retries,
+      protocol        = protocol,
+      host            = host,
+      port            = port,
+      path            = path,
+      connect_timeout = connect_timeout,
+      write_timeout   = write_timeout,
+      read_timeout    = read_timeout,
+    }
+
+    local route_id = utils.uuid()
+
+    local methods
+    if api.methods and api.methods ~= null then
+      methods = cjson.decode(api.methods)
+    end
+
+    local hosts
+    if api.hosts and api.hosts ~= null then
+      hosts = cjson.decode(api.hosts)
+    end
+
+    local paths
+    if api.uris and api.uris ~= null then
+      paths = cjson.decode(api.paths)
+    end
+
+    local regex_priority = 0
+
+    local strip_path
+    local preserve_host
+    local https_only
+
+    if api.strip_uri and api.strip_uri ~= null then
+      strip_path = not not api.strip_uri
+    end
+
+    if api.preserve_host and api.preserve_host ~= null then
+      preserve_host = not not api.preserve_host
+    end
+
+    if api.https_only and api.https_only ~= null then
+      https_only = not not api.https_only
+    end
+
+    local protocols = https_only and { "https" } or { "http", "https" }
+
+    local route = {
+      id             = route_id,
+      created_at     = created_at,
+      updated_at     = updated_at,
+      service_id     = service_id,
+      protocols      = protocols,
+      methods        = methods,
+      hosts          = hosts,
+      paths          = paths,
+      regex_priority = regex_priority,
+      strip_path     = strip_path,
+      preserve_host  = preserve_host,
+    }
+
+    migrations[i] = {
+      api     = api,
+      route   = route,
+      service = service,
+      plugins = plugins[api.id]
+    }
+  end
+
+  local escape = function(literal, type)
+    if literal == nil or literal == null then
+      return "NULL"
+    end
+
+    if type == "timestamp" then
+      return concat { "TO_TIMESTAMP(", self:escape_literal(tonumber(fmt("%.3f", literal))), ") AT TIME ZONE 'UTC'" }
+    end
+
+    if type == "array" then
+      if not literal[1] then
+        return self:escape_literal("{}")
+      end
+
+      return encode_array(literal)
+    end
+
+    return self:escape_literal(literal)
+  end
+
+  local sql = {}
+  for i = 1, migrations.n do
+    local migration = migrations[i]
+    local service   = migration.service
+    local route     = migration.route
+    local api       = migration.api
+    local api_name  = api.name or api.id
+
+    local has_custom_plugins
+
+    local queries = 5
+
+    local plugins_sql = {}
+    if migration.plugins then
+      queries = queries + migration.plugins.n
+      for j = 1, migration.plugins.n do
+        local plugin = migration.plugins[j].id
+        if not plugin.is_bundled then
+          has_custom_plugins = true
+        end
+
+        plugins_sql[j] = fmt([[
+
+       UPDATE plugins
+          SET route_id = %s, api_id = %s
+        WHERE id = %s;
+]],
+          escape(route.id),
+          escape(nil),
+          escape(migration.plugins[j].id))
+      end
+    end
+
+    sql = fmt([[
+-- Migration of %s API to Routes and Services
+BEGIN;
+  INSERT INTO services (id, created_at, updated_at, name, retries, protocol, host, port, path, connect_timeout, write_timeout, read_timeout)
+       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+
+  INSERT INTO routes (id, created_at, updated_at, service_id, protocols, methods, hosts, paths, regex_priority, strip_path, preserve_host)
+       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+%s
+  DELETE FROM apis
+        WHERE id = %s;
+COMMIT;]],
+      escape(api_name),
+      escape(service.id),
+      escape(service.created_at, "timestamp"),
+      escape(service.updated_at, "timestamp"),
+      escape(service.name),
+      escape(service.retries),
+      escape(service.protocol),
+      escape(service.host),
+      escape(service.port),
+      escape(service.path),
+      escape(service.connect_timeout),
+      escape(service.write_timeout),
+      escape(service.read_timeout),
+      escape(route.id),
+      escape(route.created_at, "timestamp"),
+      escape(route.updated_at, "timestamp"),
+      escape(route.service_id),
+      escape(route.protocols, "array"),
+      escape(route.methods, "array"),
+      escape(route.hosts, "array"),
+      escape(route.paths, "array"),
+      escape(route.regex_priority),
+      escape(route.strip_path),
+      escape(route.preserve_host),
+      concat(plugins_sql),
+      escape(api.id)
+    )
+
+    local res, err, _, num_queries = self:query(sql)
+    if not res then
+      return nil, err
+    end
+
+    if res[1] ~= true then
+      return nil, "unexpected error"
+    end
+
+    for j=2, queries - 1 do
+      if type(res[j]) ~= "table" or res[j].affected_rows ~= 1 then
+        return nil, "unexpected error"
+      end
+    end
+
+    if res[queries] ~= true then
+      return nil, "unexpected error"
+    end
+
+    if queries ~= num_queries then
+      return nil, "unexpected error"
+    end
+  end
+
+  return true
 end
 
 
