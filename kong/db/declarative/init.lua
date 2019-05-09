@@ -144,7 +144,7 @@ function Config:parse_table(dc_table)
     return nil, pretty_print_error(err_t), err_t
   end
 
-  return entities, dc_table._format_version
+  return entities, nil, nil, dc_table._format_version
 end
 
 
