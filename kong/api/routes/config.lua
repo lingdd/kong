@@ -27,19 +27,31 @@ return {
         })
       end
 
-      local entities, _, err_t, vers
+      local check_hash, old_hash
+      if tostring(self.params.check_hash) == "1" then
+        check_hash = true
+        old_hash = declarative.get_current_hash()
+      end
+      self.params.check_hash = nil
+
+      local entities, _, err_t, vers, new_hash
       if self.params._format_version then
-        entities, _, err_t, vers = dc:parse_table(self.params)
+        entities, _, err_t, vers, new_hash = dc:parse_table(self.params)
       else
-        local config = self.params.config
-        entities, _, err_t, vers = dc:parse_string(config, nil, accept)
+      local config = self.params.config
+        entities, _, err_t, vers, new_hash =
+          dc:parse_string(config, nil, accept, old_hash)
+      end
+
+      if check_hash and new_hash and old_hash == new_hash then
+        return kong.response.exit(304)
       end
 
       if not entities then
         return kong.response.exit(400, errors:declarative_config(err_t))
       end
 
-      local ok, err = declarative.load_into_cache_with_events(entities)
+      local ok, err = declarative.load_into_cache_with_events(entities, new_hash)
       if not ok then
         kong.log.err("failed loading declarative config into cache: ", err)
         return kong.response.exit(500, { message = "An unexpected error occurred" })
