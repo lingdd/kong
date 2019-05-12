@@ -233,9 +233,13 @@ local function get_next(self)
     end
   end
 
+  -- Return the plugin configuration if:
+  -- * The plugin must have a customized phase handler function (different from Base Plugin)
+  -- * The current phase is init_worker, (plugin name at least. config might be nil because no route_id/service_id etc in init_worker)
+  -- * A combo has been found and a conf has been loaded
   local phase = self.iterator.phases[self.phase]
-  -- return the plugin configuration
-  if phase and phase[plugin.name] and ctx.plugins[plugin.name] then
+  if phase and phase[plugin.name]
+  and (self.phase == "init_worker" or ctx.plugins[plugin.name]) then
     return plugin, ctx.plugins[plugin.name]
   end
 
@@ -289,17 +293,14 @@ function PluginsIterator.new(version)
     end
   end
 
+  local phase_handler
   for _, plugin in ipairs(loaded_plugins) do
     if combos[plugin.name] then
       for phase_name, phase in pairs(phases) do
-        if plugin.handler[phase_name] ~= BasePlugin[phase_name] then
+        phase_handler = plugin.handler[phase_name]
+        if phase_handler and phase_handler ~= BasePlugin[phase_name] then
           phase[plugin.name] = true
         end
-      end
-
-    else
-      if plugin.handler.init_worker ~= BasePlugin.init_worker then
-        phases.init_worker[plugin.name] = true
       end
     end
   end
