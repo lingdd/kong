@@ -121,7 +121,7 @@ function _Certificates:update(cert_pk, cert, options)
       if (name_list and #name_list ~= 0) or #snis ~= 0 then
         local err_t = self.errors:schema_violation({
           key = "one or more SNI names are still associated with this" ..
-                 " certificate, private key can not be removed",
+                 " certificate, private key cannot be removed",
         })
 
         return nil, tostring(err_t), err_t

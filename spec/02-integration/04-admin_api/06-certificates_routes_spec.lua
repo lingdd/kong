@@ -484,7 +484,7 @@ describe("Admin API: #" .. strategy, function()
         local body = assert.res_status(400, res)
         local json = cjson.decode(body)
         assert.matches("snis: private key is not present, \"snis\" field should be absent", json.message,
-                       nil, trie)
+                       nil, true)
       end)
 
       it("only prohibits adding SNI to certificate without private keys", function()
@@ -548,7 +548,7 @@ describe("Admin API: #" .. strategy, function()
         local res = client:post("/certificates", {
           body    = {
             cert  = ssl_fixtures.cert,
-            snis  = null,
+            snis  = cjson.null,
           },
           headers = { ["Content-Type"] = "application/json" },
         })
@@ -756,8 +756,8 @@ describe("Admin API: #" .. strategy, function()
           },
           headers = { ["Content-Type"] = "application/json" },
         })
-        body = assert.res_status(400, res)
-        json = cjson.decode(body)
+        local body = assert.res_status(400, res)
+        local json = cjson.decode(body)
         assert.matches("certificate: must have the \"key\" field (private key) set to assign SNI names",
                        json.message, nil, true)
       end)
@@ -769,9 +769,9 @@ describe("Admin API: #" .. strategy, function()
           },
           headers = { ["Content-Type"] = "application/json" },
         })
-        body = assert.res_status(400, res)
-        json = cjson.decode(body)
-        assert.matches("key: one or more SNI names are still associated with this certificate, private key can not be removed",
+        local body = assert.res_status(400, res)
+        local json = cjson.decode(body)
+        assert.matches("key: one or more SNI names are still associated with this certificate, private key cannot be removed",
                        json.message, nil, true)
       end)
     end)

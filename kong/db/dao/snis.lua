@@ -20,7 +20,7 @@ end
 
 local function check_private_key_exists(self, sni)
   if not sni.certificate or not sni.certificate.id then
-    -- just let validator do it's job
+    -- just let validator do its job
     return true
   end
 
@@ -159,6 +159,7 @@ function _SNIs:update(pk, entity, options)
     return nil, err, err_t
   end
 
+  local _
   _, err, err_t = invalidate_cache(self, self:select(pk))
   if err then
     return nil, err, err_t
@@ -175,6 +176,7 @@ function _SNIs:update_by_name(name, entity, options)
     return nil, err, err_t
   end
 
+  local _
   _, err, err_t = invalidate_cache(self, self:select_by_name(name))
   if err then
     return nil, err, err_t
@@ -191,6 +193,7 @@ function _SNIs:upsert(pk, entity, options)
     return nil, err, err_t
   end
 
+  local _
   _, err, err_t = invalidate_cache(self, self:select(pk))
   if err then
     return nil, err, err_t
@@ -207,6 +210,7 @@ function _SNIs:upsert_by_name(name, entity, options)
     return nil, err, err_t
   end
 
+  local _
   _, err, err_t = invalidate_cache(self, self:select_by_name(name))
   if err then
     return nil, err, err_t

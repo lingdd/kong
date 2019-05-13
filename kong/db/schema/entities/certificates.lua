@@ -19,7 +19,7 @@ return {
     { custom_entity_check = {
       field_sources = { "cert", "key" },
       fn = function(entity)
-        if not entity.key or entity.key == null then
+        if entity.key == null then
           -- no private key
           return true
         end
